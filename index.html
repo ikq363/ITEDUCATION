@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistem Pengecaman Muka AI + Firebase Firestore</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f4f7f6;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      margin: 0;
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .container {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      max-width: 500px;
+      width: 100%;
+    }
+
+    video, canvas {
+      width: 100%;
+      max-width: 400px;
+      border-radius: 8px;
+      border: 2px solid #ddd;
+      background-color: #000;
+    }
+
+    .btn {
+      margin-top: 15px;
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      color: white;
+      background-color: #007bff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.3s ease;
+      width: 100%;
+      max-width: 400px;
+    }
+
+    .btn:hover {
+      background-color: #0056b3;
+    }
+
+    .btn:disabled {
+      background-color: #a0a0a0;
+      cursor: not-allowed;
+    }
+
+    #resultBox {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 8px;
+      width: 100%;
+      max-width: 400px;
+      box-sizing: border-box;
+      display: none;
+      font-weight: bold;
+      text-align: center;
+    }
+
+    .success {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+
+    .loading {
+      background-color: #e2e3e5;
+      color: #383d41;
+      border: 1px solid #d6d8db;
+    }
+
+    .memory-list {
+      margin-top: 20px;
+      width: 100%;
+      max-width: 400px;
+      font-size: 14px;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Sistem Pengecaman Muka AI (Firestore Cloud)</h1>
+
+  <div class="container">
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <button id="scanBtn" class="btn">Scan & Kenal Pasti Muka</button>
+
+    <div id="resultBox"></div>
+
+    <div class="memory-list">
+      <h3>Muka Diterima (Firestore DB):</h3>
+      <ul id="knownList">Memuatkan data dari Firebase...</ul>
+    </div>
+  </div>
+
+  <!-- Firebase & Application Logic (ES Module Script) -->
+  <script type="module">
+    // 1. Import Firebase SDKs
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-analytics.js";
+    import { getFirestore, collection, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // Configuration Firebase
+    const firebaseConfig = {
+      apiKey: "AIzaSyDGuw42ifcc8jOcOk_gQF89yEaujkouiXQ",
+      authDomain: "iteducation-47e03.firebaseapp.com",
+      projectId: "iteducation-47e03",
+      storageBucket: "iteducation-47e03.firebasestorage.app",
+      messagingSenderId: "67845172634",
+      appId: "1:67845172634:web:8877ca103b002869309e23",
+      measurementId: "G-4JE1YPDJT8"
+    };
+
+    // Initialize Firebase & Firestore
+    const app = initializeApp(firebaseConfig);
+    const analytics = getAnalytics(app);
+    const db = getFirestore(app);
+
+    // Gemini API Configuration
+    const GEMINI_API_KEY = "AIzaSyD-ydwrEQdj5OY18GfqNIs7Gi2jXZc1aWE";
+    const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+    // UI Elements
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('canvas');
+    const resultBox = document.getElementById('resultBox');
+    const scanBtn = document.getElementById('scanBtn');
+    const knownList = document.getElementById('knownList');
+
+    // 2. Access Webcam
+    async function setupWebcam() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+      } catch (err) {
+        alert("Gagal mengakses webcam: " + err);
+      }
+    }
+
+    // 3. Firestore Ops: Get All Registered Faces
+    async function getStoredFaces() {
+      const faces = [];
+      try {
+        const querySnapshot = await getDocs(collection(db, "registeredFaces"));
+        querySnapshot.forEach((doc) => {
+          faces.push(doc.data());
+        });
+      } catch (e) {
+        console.error("Ralat membaca data Firestore: ", e);
+      }
+      return faces;
+    }
+
+    // 4. Firestore Ops: Save New Face
+    async function saveFace(name, description) {
+      try {
+        await addDoc(collection(db, "registeredFaces"), {
+          name: name,
+          description: description,
+          createdAt: new Date()
+        });
+        await updateMemoryDisplay();
+      } catch (e) {
+        console.error("Ralat menyimpan ke Firestore: ", e);
+        alert("Gagal menyimpan ke pangkalan data.");
+      }
+    }
+
+    // 5. Update UI List of Registered Faces
+    async function updateMemoryDisplay() {
+      const faces = await getStoredFaces();
+      if (faces.length === 0) {
+        knownList.innerHTML = "<li>Belum ada muka disimpan dalam Firestore.</li>";
+      } else {
+        knownList.innerHTML = faces.map(f => `<li><b>${f.name}</b></li>`).join('');
+      }
+    }
+
+    // Helper: Show UI Result Message
+    function showResult(text, type) {
+      resultBox.style.display = 'block';
+      resultBox.className = type;
+      resultBox.innerText = text;
+    }
+
+    // Helper: Capture Frame from Webcam as Base64
+    function captureImage() {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg').split(',')[1];
+    }
+
+    // 6. Main Process: Scan & Match Face via Gemini AI
+    async function processFaceScan() {
+      scanBtn.disabled = true;
+      showResult("Sedang menganalisis muka dengan Gemini AI...", "loading");
+
+      const base64Image = captureImage();
+      const knownFaces = await getStoredFaces();
+
+      let promptText = "";
+      if (knownFaces.length === 0) {
+        promptText = `
+        Analisis gambar ini. Huraikan ciri-ciri fizikal muka orang dalam gambar ini secara sangat terperinci (bentuk muka, cermin mata, bentuk rambut, tahi lalat, kening, bibir, hidung). 
+        Balas dalam format JSON sahaja seperti berikut:
+        {
+          "isMatched": false,
+          "name": "",
+          "description": "huraian fizikal muka terperinci di sini"
+        }`;
+      } else {
+        promptText = `
+        Bandingkan gambar orang ini dengan senarai ciri-ciri muka yang telah didaftarkan dalam database:
+        ${JSON.stringify(knownFaces)}
+
+        Jika muka dalam gambar WUJUD/PADAN dengan mana-mana rekod dalam senarai (walau sedikit perubahan reaksi/sudut), set isMatched kepada true dan kembalikan nama orang tersebut.
+        Jika muka TIDAK PADAN langsung dengan mana-mana rekod, set isMatched kepada false dan berikan huraian fizikal muka terperinci.
+
+        Sila balas dalam format JSON SAHAJA tanpa sebarang teks tambahan:
+        {
+          "isMatched": true / false,
+          "name": "nama orang jika padan",
+          "description": "huraian fizikal terperinci muka jika tidak padan"
+        }`;
+      }
+
+      const payload = {
+        contents: [
+          {
+            parts: [
+              { text: promptText },
+              {
+                inline_data: {
+                  mime_type: "image/jpeg",
+                  data: base64Image
+                }
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          response_mime_type: "application/json"
+        }
+      };
+
+      try {
+        const response = await fetch(GEMINI_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+        const aiResponseText = data.candidates[0].content.parts[0].text;
+        const result = JSON.parse(aiResponseText);
+
+        if (result.isMatched && result.name) {
+          showResult(`Muka Dikenali! Ini ialah: ${result.name} 👋`, "success");
+        } else {
+          showResult("Muka baru dikesan!", "loading");
+          setTimeout(async () => {
+            const personName = prompt("Muka ini belum ada dalam pangkalan data. Sila masukkan NAMA bagi muka ini:");
+            if (personName && personName.trim() !== "") {
+              await saveFace(personName.trim(), result.description);
+              showResult(`Berjaya disimpan ke Firestore! Muka didaftarkan sebagai: ${personName}`, "success");
+            } else {
+              showResult("Pendaftaran nama dibatalkan.", "loading");
+            }
+          }, 300);
+        }
+
+      } catch (err) {
+        console.error(err);
+        showResult("Ralat berlaku semasa menganalisis gambar. Cuba lagi.", "loading");
+      } finally {
+        scanBtn.disabled = false;
+      }
+    }
+
+    // Attach Event Listeners
+    scanBtn.addEventListener('click', processFaceScan);
+
+    // Initial Executions
+    setupWebcam();
+    updateMemoryDisplay();
+  </script>
+</body>
+</html>
